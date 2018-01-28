@@ -1,5 +1,10 @@
 #!/bin/bash
+# Requires:
+#   gpsbabel (https://www.gpsbabel.org/ Debian: gpsbabel)
+#   csvtool (https://github.com/Chris00/ocaml-csv Debian: csvtool)
 # Needs bash for PIPESTATUS
+# Note: csvtool on Debian fails on files with unicode byte order mark.
+# Use bomstrip or similar to fix the .txt files in this case.
 
 # die $EXITCODE $MESSAGE
 # Print a message and exit with a given exit code.
@@ -13,31 +18,39 @@ ROUTE=$1
 
 echo "Getting route $ROUTE"
 
-RID=$(grep "^[^,]*,[^,]*,${ROUTE},.*$" routes.txt | cut -d ',' -f1 ; exit ${PIPESTATUS[0]})
-test $? -eq 0 || die 1 "Route short name not found in GTFS"
+RID=$(csvtool namedcol route_short_name,route_id routes.txt \
+    | grep "^${ROUTE}," | cut -d ',' -f2 ; exit ${PIPESTATUS[1]})
+test $? -eq 0 || die 1 "Route short name not found in routes.txt"
 echo "route_id = $RID"
 
-SHAPES=$(grep "^${RID}" shapes.txt | cut -d',' -f1 | sort -u ; exit ${PIPESTATUS[0]})
+SHAPES=$(csvtool namedcol route_id,shape_id trips.txt \
+    | grep "^${RID}," | cut -d',' -f2 | sort -u ; exit ${PIPESTATUS[1]})
 test $? -eq 0 || die 1 "route_id not found in shapes"
-#echo "shapes = $SHAPES"
+echo "shapes = $SHAPES"
 
 echo "Writing to GPX files..."
 IFS=$'\n'
 for SS in $SHAPES ; do
-    OUTNAME=$(echo $SS | sed "s/^[^_]*/$ROUTE/")
-    grep "^${SS}," shapes.txt | cut -d',' -f2,3 | gpsbabel -t -i unicsv,fields=lat+lon -f - -o gpx -F "${OUTNAME}.gpx"
+    #OUTNAME=$(echo $SS | sed "s/^[^_]*/$ROUTE/")
+    OUTNAME="${ROUTE}_${SS}"
+    csvtool namedcol shape_id,shape_pt_lat,shape_pt_lon shapes.txt \
+    | grep "^${SS}," | cut -d',' -f2,3 \
+    | gpsbabel -t -i unicsv,fields=lat+lon -f - -o gpx -F "${OUTNAME}.gpx"
     echo "${OUTNAME}.gpx"
-    TRIPID=$(grep "^${RID},[^,]*,[^,]*,[^,]*,[^,]*,${SS},.*" trips.txt | head -1 | cut -d',' -f3 )
+    TRIPID=$(csvtool namedcol route_id,shape_id,trip_id trips.txt \
+    | grep "^${RID},${SS}," | head -1 | cut -d',' -f3)
     test -n "$TRIPID" || die 1 "No trip_id found in trips.txt"
     #echo "Getting stops for trip_id = $TRIPID"
-    STOPIDS=$(grep "^${TRIPID},.*" stop_times.txt | cut -d',' -f4 ; exit ${PIPESTATUS[0]})
+    STOPIDS=$(csvtool namedcol trip_id,stop_id stop_times.txt \
+    | grep "^${TRIPID}," | cut -d',' -f2 ; exit ${PIPESTATUS[1]})
     test $? -eq 0 || die 1 "trip_id not found in stop_times.txt"
     TFILE=$(tempfile)
-    echo "${OUTNAME}_stops.gpx"
     for STOP in $STOPIDS ; do
-        grep "^${STOP}," stops.txt >> "$TFILE"
+        csvtool namedcol stop_id,stop_code,stop_name,stop_lat,stop_lon stops.txt\
+        | grep "^${STOP}," >> "$TFILE"
         test $? -eq 0 || die 1 "stop_id $STOP not found in stops.txt"
     done
-    cat "$TFILE" | cut -d',' -f2,3,5,6 | tr -d '"' | gpsbabel -w -i unicsv,fields=name+desc+lat+lon -f - -o gpx -F "${OUTNAME}_stops.gpx"
+    cat "$TFILE" | cut -d',' -f2,3,4,5 | tr -d '"' | gpsbabel -w -i unicsv,fields=name+desc+lat+lon -f - -o gpx -F "${OUTNAME}_stops.gpx"
+    echo "${OUTNAME}_stops.gpx"
     rm -f "$TFILE"
 done
