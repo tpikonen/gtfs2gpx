@@ -28,7 +28,7 @@ die ()
 
 ROUTE=$1
 
-echo "Getting route $ROUTE"
+echo "Finding route $ROUTE"
 
 RID=$(csvtool namedcol route_short_name,route_id routes.txt \
     | grep "^${ROUTE}," | cut -d ',' -f2 ; exit ${PIPESTATUS[1]})
@@ -37,7 +37,7 @@ echo "route_id = $RID"
 
 SHAPES=$(csvtool namedcol route_id,shape_id trips.txt \
     | grep "^${RID}," | cut -d',' -f2 | sort -u ; exit ${PIPESTATUS[1]})
-test $? -eq 0 || die 1 "route_id not found in shapes"
+test $? -eq 0 || die 1 "route_id not found in trips.txt"
 echo "shapes = $SHAPES"
 
 echo "Writing to GPX files..."
@@ -45,23 +45,25 @@ IFS=$'\n'
 for SS in $SHAPES ; do
     OUTNAME="${ROUTE}_${SS}"
     csvtool namedcol shape_id,shape_pt_lat,shape_pt_lon shapes.txt \
-    | grep "^${SS}," | cut -d',' -f2,3 \
-    | gpsbabel -t -i unicsv,fields=lat+lon -f - -o gpx -F "${OUTNAME}.gpx"
+        | grep "^${SS}," | cut -d',' -f2,3 \
+        | gpsbabel -t -i unicsv,fields=lat+lon -f - -o gpx -F "${OUTNAME}.gpx"
     echo "${OUTNAME}.gpx"
     TRIPID=$(csvtool namedcol route_id,shape_id,trip_id trips.txt \
-    | grep "^${RID},${SS}," | head -1 | cut -d',' -f3)
+        | grep "^${RID},${SS}," | head -1 | cut -d',' -f3)
     test -n "$TRIPID" || die 1 "No trip_id found in trips.txt"
     #echo "Getting stops for trip_id = $TRIPID"
     STOPIDS=$(csvtool namedcol trip_id,stop_id stop_times.txt \
-    | grep "^${TRIPID}," | cut -d',' -f2 ; exit ${PIPESTATUS[1]})
+        | grep "^${TRIPID}," | cut -d',' -f2 ; exit ${PIPESTATUS[1]})
     test $? -eq 0 || die 1 "trip_id not found in stop_times.txt"
     TFILE=$(tempfile)
     for STOP in $STOPIDS ; do
         csvtool namedcol stop_id,stop_code,stop_name,stop_lat,stop_lon stops.txt\
-        | grep "^${STOP}," >> "$TFILE"
+            | grep "^${STOP}," >> "$TFILE"
         test $? -eq 0 || die 1 "stop_id $STOP not found in stops.txt"
     done
-    cat "$TFILE" | cut -d',' -f2,3,4,5 | tr -d '"' | gpsbabel -w -i unicsv,fields=name+desc+lat+lon -f - -o gpx -F "${OUTNAME}_stops.gpx"
+    cat "$TFILE" | cut -d',' -f2,3,4,5 | tr -d '"' \
+        | gpsbabel -w -i unicsv,fields=name+desc+lat+lon -f - \
+            -o gpx -F "${OUTNAME}_stops.gpx"
     echo "${OUTNAME}_stops.gpx"
     rm -f "$TFILE"
 done
